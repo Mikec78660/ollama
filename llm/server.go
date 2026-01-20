@@ -936,7 +936,11 @@ func (s *llmServer) createLayout(systemInfo ml.SystemInfo, systemGPUs []ml.Devic
 
 func (s *llmServer) buildLayout(systemGPUs []ml.DeviceInfo, memory *ml.BackendMemory, requireFull bool, backoff float32) (ml.GPULayersList, []uint64) {
 	gpus := append(make([]ml.DeviceInfo, 0, len(systemGPUs)), systemGPUs...)
-	sort.Sort(sort.Reverse(ml.ByFreeMemory(gpus)))
+	if envconfig.GpuOrder() != "" {
+		sort.Sort(ml.ByCustomOrder{Devices: gpus, Order: strings.Split(envconfig.GpuOrder(), ",")})
+	} else {
+		sort.Sort(sort.Reverse(ml.ByFreeMemory(gpus)))
+	}
 
 	layers := make([]uint64, len(memory.CPU.Weights))
 	for i := range layers {
@@ -1061,7 +1065,7 @@ nextLayer:
 // assignLayers packs the maximum number of layers onto the smallest set of GPUs and comes up with a layer assignment
 func assignLayers(layers []uint64, gpus []ml.DeviceInfo, requireFull bool, requestedLayers int, lastUsedGPU int) (gpuLayers ml.GPULayersList) {
 	// If the user is manually overriding parameters, treat all GPUs equally so they split according to VRAM
-	if requestedLayers >= 0 || envconfig.SchedSpread() {
+	if requestedLayers >= 0 || envconfig.SchedSpread() || envconfig.GpuOrder() != "" {
 		for i := range gpus {
 			gpus[i].Integrated = false
 		}
@@ -1072,7 +1076,7 @@ func assignLayers(layers []uint64, gpus []ml.DeviceInfo, requireFull bool, reque
 		// requestedLayers may be -1 if nothing was requested
 		requestedLayers = min(len(layers), requestedLayers)
 
-		if !envconfig.SchedSpread() {
+		if !envconfig.SchedSpread() && envconfig.GpuOrder() == "" {
 			for i := lastUsedGPU; i < len(gpus); i++ {
 				// Try to pack things into as few GPUs as possible
 				forceRequest := i == len(gpus)-1 && !requireFull
@@ -1102,7 +1106,16 @@ func assignLayers(layers []uint64, gpus []ml.DeviceInfo, requireFull bool, reque
 // each GPU and a small one will force even balancing. Higher performance GPUs are
 // used first.
 func findBestFit(layers []uint64, gpus []ml.DeviceInfo, requestedLayers int, forceRequest bool) (gpuLayers ml.GPULayersList) {
-	for _, gl := range ml.ByPerformance(gpus) {
+	var groups [][]ml.DeviceInfo
+	if envconfig.GpuOrder() != "" {
+		// If the user has specified a custom order, we should not split by performance
+		// as this might split the user's ordered list.
+		groups = [][]ml.DeviceInfo{gpus}
+	} else {
+		groups = ml.ByPerformance(gpus)
+	}
+
+	for _, gl := range groups {
 		var high float32 = 1
 		var low float32 = 0
 
@@ -1114,14 +1127,19 @@ func findBestFit(layers []uint64, gpus []ml.DeviceInfo, requestedLayers int, for
 		bestAssignments := greedyFit(layers, gl, high, requestedLayers)
 		maxNumGPU := bestAssignments.Sum()
 
-		for high-low > 1e-6 {
-			mid := (low + high) / 2
-			assignments := greedyFit(layers, gl, mid, requestedLayers)
-			if assignments.Sum() == maxNumGPU {
-				high = mid
-				bestAssignments = assignments
-			} else {
-				low = mid
+		// If a custom order is specified, we want strict sequential filling (highest priority first),
+		// not load balancing. So we skip the binary search that tries to find a lower capacity factor
+		// (which would spread the load).
+		if envconfig.GpuOrder() == "" {
+			for high-low > 1e-6 {
+				mid := (low + high) / 2
+				assignments := greedyFit(layers, gl, mid, requestedLayers)
+				if assignments.Sum() == maxNumGPU {
+					high = mid
+					bestAssignments = assignments
+				} else {
+					low = mid
+				}
 			}
 		}
 

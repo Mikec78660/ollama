@@ -223,6 +223,7 @@ var (
 	VkVisibleDevices      = String("GGML_VK_VISIBLE_DEVICES")
 	GpuDeviceOrdinal      = String("GPU_DEVICE_ORDINAL")
 	HsaOverrideGfxVersion = String("HSA_OVERRIDE_GFX_VERSION")
+	GpuOrder              = String("OLLAMA_GPU_ORDER")
 )
 
 func Uint(key string, defaultValue uint) func() uint {
@@ -314,6 +315,7 @@ func AsMap() map[string]EnvVar {
 		ret["GGML_VK_VISIBLE_DEVICES"] = EnvVar{"GGML_VK_VISIBLE_DEVICES", VkVisibleDevices(), "Set which Vulkan devices are visible by numeric ID"}
 		ret["GPU_DEVICE_ORDINAL"] = EnvVar{"GPU_DEVICE_ORDINAL", GpuDeviceOrdinal(), "Set which AMD devices are visible by numeric ID"}
 		ret["HSA_OVERRIDE_GFX_VERSION"] = EnvVar{"HSA_OVERRIDE_GFX_VERSION", HsaOverrideGfxVersion(), "Override the gfx used for all detected AMD GPUs"}
+		ret["OLLAMA_GPU_ORDER"] = EnvVar{"OLLAMA_GPU_ORDER", GpuOrder(), "Comma-separated list of GPU UUIDs/PCI IDs to prioritize"}
 		ret["OLLAMA_VULKAN"] = EnvVar{"OLLAMA_VULKAN", EnableVulkan(), "Enable experimental Vulkan support"}
 	}
 

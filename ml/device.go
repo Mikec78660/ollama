@@ -367,6 +367,82 @@ func (a ByFreeMemory) Less(i, j int) bool {
 	return a[i].FreeMemory < a[j].FreeMemory
 }
 
+// ByCustomOrder sorts devices based on a user-provided priority list.
+// The primary goal is to order the slice such that high-priority GPUs are at the END,
+// because the scheduler's greedyFit algorithm fills from the end of the slice first.
+type ByCustomOrder struct {
+	Devices []DeviceInfo
+	Order   []string
+}
+
+func (a ByCustomOrder) Len() int { return len(a.Devices) }
+func (a ByCustomOrder) Swap(i, j int) {
+	a.Devices[i], a.Devices[j] = a.Devices[j], a.Devices[i]
+}
+func (a ByCustomOrder) Less(i, j int) bool {
+	rankI := getRank(a.Devices[i], a.Order)
+	rankJ := getRank(a.Devices[j], a.Order)
+
+	// If both have the same rank (e.g. both unlisted), fall back to FreeMemory
+	// We want larger free memory to be later in the slice (filled first),
+	// so we want Ascending FreeMemory?
+	// Wait, standard behavior `Reverse(ByFreeMemory)` puts Large Free First.
+	// But `greedyFit` fills from End.
+	// If `greedyFit` fills from End, and `Reverse` makes `[Large, Small]`, it fills Small first.
+	// If we want to fill Large first, we want `[Small, Large]`.
+	// Which is `ByFreeMemory` (Ascending).
+	// But the default code uses `Reverse`...
+	// Ah, the user requirement is "Highest Priority first".
+	// For "unlisted" (equal lowest priority), do we want standard behavior?
+	// Standard behavior seems to be "fit into Smallest that fits" (Best Fit).
+	// If we want that, we want `[Large, Small]`.
+	// So `Less` should put Large before Small.
+	// `Large.Free > Small.Free`.
+	// `Less` returns true if i comes before j.
+	// `Large > Small` -> True.
+	// So `Free(i) > Free(j)`.
+	if rankI == rankJ {
+		// Use default Ollama preference: smallest first?
+		// Default code: sort.Reverse(ByFreeMemory) -> [Large, Small]
+		// greedyFit fills from End -> Small first.
+		// So we probably want to mimic [Large, Small] for unlisted items.
+		// i.e. Descending Free Memory.
+		return a.Devices[i].FreeMemory > a.Devices[j].FreeMemory
+	}
+
+	// We want Rank 0 (High Prio) to be at the END.
+	// We want Rank 999 (Low Prio) to be at the BEGINNING.
+	// So [999, 0].
+	// i=999, j=0.
+	// i comes before j.
+	// 999 > 0.
+	return rankI > rankJ
+}
+
+func getRank(d DeviceInfo, order []string) int {
+	for i, term := range order {
+		term = strings.TrimSpace(term)
+		// Check ID (exact)
+		if d.ID == term {
+			return i
+		}
+		// Check PCIID (exact)
+		if d.PCIID == term {
+			return i
+		}
+		// Check UUID/FilterID (exact or case-insensitive?)
+		if strings.EqualFold(d.FilterID, term) {
+			return i
+		}
+		// Check Name (contains, case-insensitive)
+		if strings.Contains(strings.ToLower(d.Name), strings.ToLower(term)) {
+			return i
+		}
+	}
+	// Not found = lowest priority
+	return math.MaxInt
+}
+
 // ByPerformance groups devices by similar speed
 func ByPerformance(l []DeviceInfo) [][]DeviceInfo {
 	resp := [][]DeviceInfo{}
