@@ -846,7 +846,19 @@ func ListRunningHandler(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	var data [][]string
+	type modelRow struct {
+		name      string
+		id        string
+		size      string
+		layerSize string
+		processor string
+		context   string
+		layers    string
+		until     string
+		isFirst   bool
+	}
+
+	var allRows []modelRow
 
 	for _, m := range models.Models {
 		if len(args) == 0 || strings.HasPrefix(m.Name, args[0]) {
@@ -872,20 +884,204 @@ func ListRunningHandler(cmd *cobra.Command, args []string) error {
 				until = format.HumanTime(m.ExpiresAt, "Never")
 			}
 			ctxStr := strconv.Itoa(m.ContextLength)
-			data = append(data, []string{m.Name, m.Digest[:12], format.HumanBytes(m.Size), procStr, ctxStr, until})
+
+			// Calculate layer size (approximate)
+			var layerSizeStr string
+			if m.LayerInfo.Total > 0 {
+				layerSizeBytes := m.Size / int64(m.LayerInfo.Total)
+				layerSizeStr = format.HumanBytes(layerSizeBytes)
+			} else {
+				layerSizeStr = "N/A"
+			}
+
+			// Build layer info entries
+			type layerEntry struct {
+				name string
+			}
+			var layerEntries []layerEntry
+
+			// Find max display name width (including colon)
+			maxNameWidth := 0
+			for _, gpu := range m.LayerInfo.GPU {
+				displayName := gpu.DeviceName
+				if displayName == "" {
+					displayName = gpu.DeviceID
+				}
+				// Include the colon in width calculation
+				if len(displayName)+1 > maxNameWidth {
+					maxNameWidth = len(displayName) + 1
+				}
+			}
+			// Also consider CPU entry
+			if m.LayerInfo.CPU > 0 {
+				if 4 > maxNameWidth { // "CPU:" is 4 chars
+					maxNameWidth = 4
+				}
+			}
+
+			for _, gpu := range m.LayerInfo.GPU {
+				if len(gpu.Layers) > 0 {
+					// Find min and max layer indices for display
+					minLayer := gpu.Layers[0]
+					maxLayer := gpu.Layers[0]
+					for _, l := range gpu.Layers {
+						if l < minLayer {
+							minLayer = l
+						}
+						if l > maxLayer {
+							maxLayer = l
+						}
+					}
+					contiguous := true
+					for i := range gpu.Layers {
+						if gpu.Layers[i] != minLayer+i {
+							contiguous = false
+							break
+						}
+					}
+
+					// Calculate size in GB
+					sizeGB := float64(gpu.Size) / (1024 * 1024 * 1024)
+					sizeStr := fmt.Sprintf("%.1fGB", sizeGB)
+
+					// Use device name if available, otherwise use ID
+					displayName := gpu.DeviceName
+					if displayName == "" {
+						displayName = gpu.DeviceID
+					}
+
+					// Pad display name (including colon) for alignment
+					namePart := displayName + ":"
+					if len(namePart) < maxNameWidth {
+						namePart = namePart + strings.Repeat(" ", maxNameWidth-len(namePart))
+					}
+
+					var entry string
+					if contiguous && len(gpu.Layers) > 1 {
+						entry = fmt.Sprintf("%s %-2d  (%2d-%2d)  %s", namePart, len(gpu.Layers), minLayer, maxLayer, sizeStr)
+					} else if len(gpu.Layers) == 1 {
+						entry = fmt.Sprintf("%s %-2d  (l%2d)    %s", namePart, 1, gpu.Layers[0], sizeStr)
+					} else {
+						entry = fmt.Sprintf("%s %d  %v  %s", namePart, len(gpu.Layers), gpu.Layers, sizeStr)
+					}
+					layerEntries = append(layerEntries, layerEntry{name: entry})
+				}
+			}
+
+			// Add CPU entry if applicable
+			if m.LayerInfo.CPU > 0 {
+				cpuNamePart := "CPU:"
+				if len(cpuNamePart) < maxNameWidth {
+					cpuNamePart = cpuNamePart + strings.Repeat(" ", maxNameWidth-len(cpuNamePart))
+				}
+				cpuEntry := fmt.Sprintf("%s %d", cpuNamePart, m.LayerInfo.CPU)
+				layerEntries = append(layerEntries, layerEntry{name: cpuEntry})
+			}
+
+			// Create rows for each layer entry
+			for i, entry := range layerEntries {
+				row := modelRow{
+					isFirst: i == 0,
+				}
+				if i == 0 {
+					row.name = m.Name
+					row.id = m.Digest[:12]
+					row.size = format.HumanBytes(m.Size)
+					row.layerSize = layerSizeStr
+					row.processor = procStr
+					row.context = ctxStr
+					row.until = until
+					row.layers = entry.name
+				} else {
+					row.layers = entry.name
+				}
+				allRows = append(allRows, row)
+			}
 		}
 	}
 
-	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"NAME", "ID", "SIZE", "PROCESSOR", "CONTEXT", "UNTIL"})
-	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
-	table.SetAlignment(tablewriter.ALIGN_LEFT)
-	table.SetHeaderLine(false)
-	table.SetBorder(false)
-	table.SetNoWhiteSpace(true)
-	table.SetTablePadding("    ")
-	table.AppendBulk(data)
-	table.Render()
+	// Convert to table data
+	var data [][]string
+	for _, row := range allRows {
+		data = append(data, []string{row.name, row.id, row.size, row.layerSize, row.processor, row.context, row.layers, row.until})
+	}
+
+	// Calculate actual column widths based on data
+	headers := []string{"NAME", "ID", "SIZE", "LAYER SIZE", "PROCESSOR", "CONTEXT", "LAYERS", "UNTIL"}
+	colWidths := make([]int, len(headers))
+
+	// Start with header widths
+	for i, h := range headers {
+		colWidths[i] = len(h)
+	}
+
+	// Adjust based on data content
+	for _, row := range data {
+		for i, cell := range row {
+			if len(cell) > colWidths[i] {
+				colWidths[i] = len(cell)
+			}
+		}
+	}
+
+	// Calculate the position where LAYERS column starts
+	layersStartPos := 0
+	for i := 0; i < 6; i++ { // LAYERS is column 6
+		layersStartPos += colWidths[i] + 1 // +1 for space between columns
+	}
+
+	// Group data by model and handle multi-line layer entries
+	type modelGroup struct {
+		rows [][]string
+	}
+
+	var modelGroups []modelGroup
+
+	for _, row := range data {
+		// If name is empty, this is a continuation row
+		if row[0] == "" {
+			if len(modelGroups) > 0 {
+				modelGroups[len(modelGroups)-1].rows = append(modelGroups[len(modelGroups)-1].rows, row)
+			}
+		} else {
+			// This is a new model - create a new struct
+			modelGroups = append(modelGroups, modelGroup{
+				rows: [][]string{row},
+			})
+		}
+	}
+
+	// Print each model group
+	for _, group := range modelGroups {
+		// Print header
+		headerLine := ""
+		for i, h := range headers {
+			if i > 0 {
+				headerLine += " "
+			}
+			headerLine += fmt.Sprintf("%-*s", colWidths[i], h)
+		}
+		fmt.Println(headerLine)
+
+		// Print all rows for this model
+		for _, row := range group.rows {
+			if row[0] != "" {
+				// First row - print all columns
+				line := ""
+				for i, cell := range row {
+					if i > 0 {
+						line += " "
+					}
+					line += fmt.Sprintf("%-*s", colWidths[i], cell)
+				}
+				fmt.Println(line)
+			} else {
+				// Continuation row - print LAYERS at the correct position
+				spaces := strings.Repeat(" ", layersStartPos)
+				fmt.Println(spaces + row[6])
+			}
+		}
+	}
 
 	return nil
 }

@@ -331,6 +331,16 @@ func (s *Server) VRAMByGPU(id ml.DeviceID) uint64 {
 	return s.vramSize
 }
 
+// GPULayers returns empty since image generation models don't use GPU layer offloading.
+func (s *Server) GPULayers() ml.GPULayersList {
+	return nil
+}
+
+// TotalLayers returns 0 since image generation models don't use the standard layer model.
+func (s *Server) TotalLayers() uint64 {
+	return 0
+}
+
 func (s *Server) Embedding(ctx context.Context, input string) ([]float32, int, error) {
 	return nil, 0, errors.New("not supported")
 }

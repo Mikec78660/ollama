@@ -828,6 +828,26 @@ type ProcessModelResponse struct {
 	ExpiresAt     time.Time    `json:"expires_at"`
 	SizeVRAM      int64        `json:"size_vram"`
 	ContextLength int          `json:"context_length"`
+	LayerInfo     LayerInfo    `json:"layer_info,omitempty"`
+}
+
+// LayerInfo describes the distribution of model layers across GPU and CPU
+type LayerInfo struct {
+	// Layers on GPU devices
+	GPU []GPULayerInfo `json:"gpu,omitempty"`
+	// Number of layers on CPU (0 if fully on GPU)
+	CPU int `json:"cpu"`
+	// Total number of layers in the model
+	Total int `json:"total"`
+}
+
+// GPULayerInfo describes layer allocation on a single GPU
+type GPULayerInfo struct {
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name"`
+	Library    string `json:"library"` // e.g., "CUDA", "ROCm", "Metal"
+	Layers     []int  `json:"layers"`  // Layer indices loaded on this GPU
+	Size       int64  `json:"size"`    // VRAM used by this GPU in bytes
 }
 
 type TokenResponse struct {

@@ -40,6 +40,7 @@ import (
 	"github.com/ollama/ollama/llm"
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/middleware"
+	"github.com/ollama/ollama/ml"
 	"github.com/ollama/ollama/model/parsers"
 	"github.com/ollama/ollama/model/renderers"
 	"github.com/ollama/ollama/server/internal/client/ollama"
@@ -1898,6 +1899,42 @@ func (s *Server) PsHandler(c *gin.Context) {
 		if v.Options != nil {
 			mr.ContextLength = v.Options.NumCtx
 		}
+
+		// Build layer info
+		layerInfo := api.LayerInfo{
+			Total: int(v.llama.TotalLayers()),
+		}
+
+		if v.llama != nil {
+			gpuLayers := v.llama.GPULayers()
+			// Get device infos for GPU names
+			deviceInfos := v.llama.GetDeviceInfos(c.Request.Context())
+
+			deviceInfoMap := make(map[ml.DeviceID]ml.DeviceInfo)
+			for _, di := range deviceInfos {
+				deviceInfoMap[di.DeviceID] = di
+			}
+
+			for _, gl := range gpuLayers {
+				deviceInfo := deviceInfoMap[gl.DeviceID]
+				gpuInfo := api.GPULayerInfo{
+					DeviceID:   gl.ID,
+					DeviceName: deviceInfo.Name,
+					Library:    gl.Library,
+					Layers:     gl.Layers,
+					Size:       int64(v.llama.VRAMByGPU(gl.DeviceID)),
+				}
+				layerInfo.GPU = append(layerInfo.GPU, gpuInfo)
+			}
+			// CPU layers = total layers - GPU layers
+			layerInfo.CPU = layerInfo.Total - gpuLayers.Sum()
+		} else {
+			// No llama server, all layers on CPU
+			layerInfo.CPU = layerInfo.Total
+		}
+
+		mr.LayerInfo = layerInfo
+
 		// The scheduler waits to set expiresAt, so if a model is loading it's
 		// possible that it will be set to the unix epoch. For those cases, just
 		// calculate the time w/ the sessionDuration instead.

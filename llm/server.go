@@ -80,6 +80,8 @@ type LlamaServer interface {
 	GetPort() int
 	GetDeviceInfos(ctx context.Context) []ml.DeviceInfo
 	HasExited() bool
+	GPULayers() ml.GPULayersList
+	TotalLayers() uint64
 }
 
 // llmServer is an instance of a runner hosting a single model
@@ -1917,6 +1919,14 @@ func (s *llmServer) VRAMByGPU(id ml.DeviceID) uint64 {
 	}
 
 	return 0
+}
+
+func (s *llmServer) GPULayers() ml.GPULayersList {
+	return s.loadRequest.GPULayers
+}
+
+func (s *llmServer) TotalLayers() uint64 {
+	return s.totalLayers
 }
 
 func (s *ollamaServer) GetDeviceInfos(ctx context.Context) []ml.DeviceInfo {
