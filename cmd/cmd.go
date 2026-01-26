@@ -35,6 +35,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/cmd/config"
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/format"
 	"github.com/ollama/ollama/parser"
@@ -1214,8 +1215,10 @@ func showInfo(resp *api.ShowResponse, verbose bool, w io.Writer) error {
 		}
 
 		if resp.ModelInfo != nil {
-			arch := resp.ModelInfo["general.architecture"].(string)
-			rows = append(rows, []string{"", "architecture", arch})
+			arch, _ := resp.ModelInfo["general.architecture"].(string)
+			if arch != "" {
+				rows = append(rows, []string{"", "architecture", arch})
+			}
 
 			var paramStr string
 			if resp.Details.ParameterSize != "" {
@@ -1225,7 +1228,9 @@ func showInfo(resp *api.ShowResponse, verbose bool, w io.Writer) error {
 					paramStr = format.HumanNumber(uint64(f))
 				}
 			}
-			rows = append(rows, []string{"", "parameters", paramStr})
+			if paramStr != "" {
+				rows = append(rows, []string{"", "parameters", paramStr})
+			}
 
 			if v, ok := resp.ModelInfo[fmt.Sprintf("%s.context_length", arch)]; ok {
 				if f, ok := v.(float64); ok {
@@ -2222,6 +2227,7 @@ func NewCLI() *cobra.Command {
 		copyCmd,
 		deleteCmd,
 		runnerCmd,
+		config.LaunchCmd(checkServerHeartbeat),
 	)
 
 	return rootCmd
